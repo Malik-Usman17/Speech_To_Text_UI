@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mic Capture Demo (Vanilla JS + WebAudio)</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+
+<body>
+  <main class="container">
+    <h1>Voice Capture → Backend</h1>
+    <p>Click the button to start recording. We'll request mic access, apply noise suppression & gain, auto-stop on
+      silence, and upload the result to your backend.</p>
+
+
+    <div class="controls">
+      <button id="recordBtn" class="btn">🎙️ Start Recording</button>
+
+
+      <div class="sliders">
+        <label>
+          Input Gain
+          <input id="gainSlider" type="range" min="0" max="3" step="0.01" value="1" />
+        </label>
+        <label>
+          Silence Threshold
+          <input id="silenceSlider" type="range" min="-90" max="-20" step="1" value="-55" />
+          <small id="silenceValue">-55 dBFS</small>
+        </label>
+        <label>
+          Silence Hold (ms)
+          <input id="holdSlider" type="range" min="1000" max="6000" step="100" value="2000" />
+          <small id="holdValue">2000 ms</small>
+        </label>
+      </div>
+    </div>
+
+
+    <section class="status">
+      <div id="statusText">Idle</div>
+      <div class="meter">
+        <div id="meterFill" class="meter-fill"></div>
+      </div>
+    </section>
+
+
+    <section>
+      <h2>Converted Text</h2>
+      <div id="convertedText" class="converted-text">No text converted yet...</div>
+    </section>
+
+    <section>
+      <h2>Last upload</h2>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+
+  <!-- Modal dialog for recording -->
+  <dialog id="recordDialog">
+    <div class="dialog-content">
+      <h3>Recording… Speak now</h3>
+      <p class="hint">We auto-stop after silence.</p>
+      <div class="meter meter-lg">
+        <div id="dialogMeterFill" class="meter-fill"></div>
+      </div>
+      <button id="stopBtn" class="btn btn-secondary">Stop now</button>
+    </div>
+  </dialog>
+
+
+  <script type="module" src="/main.js"></script>
+</body>
+
+</html>
