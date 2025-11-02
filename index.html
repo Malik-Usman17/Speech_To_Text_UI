@@ -23,11 +23,26 @@
         <label>
           Input Gain
           <input id="gainSlider" type="range" min="0" max="3" step="0.01" value="1" />
+          <small class="gain-value">Value: <span id="gainValue">1.0</span>x</small>
+          <div class="db-guide">
+            <span class="db-labels">
+              <span>🔇 Quiet</span>
+              <span>🔊 Loud</span>
+            </span>
+            <small class="db-range">Amplifies your voice before detection</small>
+          </div>
         </label>
         <label>
           Silence Threshold
-          <input id="silenceSlider" type="range" min="-90" max="-20" step="1" value="-55" />
-          <small id="silenceValue">-55 dBFS</small>
+          <input id="silenceSlider" type="range" min="-60" max="-20" step="1" value="-40" />
+          <small id="silenceValue">-40 dBFS</small>
+          <div class="db-guide">
+            <span class="db-labels">
+              <span>🔇 Silence</span>
+              <span>🔊 Speech</span>
+            </span>
+            <small class="db-range">Lower = stop sooner | Higher = stop later</small>
+          </div>
         </label>
         <label>
           Silence Hold (ms)
@@ -43,6 +58,7 @@
       <div class="meter">
         <div id="meterFill" class="meter-fill"></div>
       </div>
+      <div id="dbLevel" class="db-level">dB: --</div>
     </section>
 
 

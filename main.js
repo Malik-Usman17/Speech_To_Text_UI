@@ -14,15 +14,18 @@ const meterFill = document.getElementById("meterFill");
 const dialogMeterFill = document.getElementById("dialogMeterFill");
 const logEl = document.getElementById("log");
 const convertedTextEl = document.getElementById("convertedText");
+const dbLevel = document.getElementById("dbLevel");
 
 
 const gainSlider = document.getElementById("gainSlider");
+const gainValue = document.getElementById("gainValue");
 const silenceSlider = document.getElementById("silenceSlider");
 const silenceValue = document.getElementById("silenceValue");
 const holdSlider = document.getElementById("holdSlider");  //silence hold duration
 const holdValue = document.getElementById("holdValue");
 
 
+gainSlider.addEventListener("input", () => (gainValue.textContent = Number(gainSlider.value).toFixed(2)));
 silenceSlider.addEventListener("input", () => (silenceValue.textContent = `${silenceSlider.value} dBFS`));
 holdSlider.addEventListener("input", () => (holdValue.textContent = `${holdSlider.value} ms`));
 
@@ -156,6 +159,20 @@ function handleStop() {
 
 
   statusText.textContent = "Uploading…";
+  
+  // Set up loading indicator with 1 second delay
+  let loadingTimer = null;
+  let isLoading = false;
+  
+  loadingTimer = setTimeout(() => {
+    isLoading = true;
+    convertedTextEl.innerHTML = `
+      <div class="loading-container">
+        <div class="loading-spinner"></div>
+        <span class="loading-text">Converting audio to text...</span>
+      </div>
+    `;
+  }, 1000);
 
   // const a = document.createElement('a');
   // a.href = URL.createObjectURL(file);
@@ -170,6 +187,17 @@ function handleStop() {
     body: form,
   })
     .then(async (res) => {
+      // Clear loading timer if response came before 1 second
+      if (loadingTimer) {
+        clearTimeout(loadingTimer);
+        loadingTimer = null;
+      }
+      
+      // Clear loading indicator if it was shown
+      if (isLoading) {
+        isLoading = false;
+      }
+      
       const response = await res.json();
       console.log('TEXT RESPONSE:', response);
       
@@ -177,16 +205,22 @@ function handleStop() {
       if (response.text || response.transcript || response.result) {
         const convertedText = response.text || response.transcript || response.result;
         convertedTextEl.textContent = convertedText;
-        convertedTextEl.style.color = '#333';
+        convertedTextEl.style.color = 'var(--text)';
       } else {
         convertedTextEl.textContent = 'No text found in response';
-        convertedTextEl.style.color = '#666';
+        convertedTextEl.style.color = 'var(--muted)';
       }
       
       appendLog(`Upload status: ${res.status}\n${JSON.stringify(response)}`);
       statusText.textContent = res.ok ? "Uploaded ✔" : `Upload failed (${res.status})`;
     })
     .catch((err) => {
+      // Clear loading timer if there was an error
+      if (loadingTimer) {
+        clearTimeout(loadingTimer);
+        loadingTimer = null;
+      }
+      
       convertedTextEl.textContent = 'Error converting audio to text';
       convertedTextEl.style.color = '#d32f2f';
       appendLog(`Upload error: ${err?.message || err}`);
@@ -223,37 +257,47 @@ function startMetersAndSilenceWatch() {
     analyser.getByteTimeDomainData(dataArray);
 
 
-    // Compute RMS in dBFS
+    // Compute RMS in dBFS (more accurate calculation)
     let sum = 0;
     for (let i = 0; i < dataArray.length; i++) {
       const v = (dataArray[i] - 128) / 128; // -1..1
       sum += v * v;
     }
     const rms = Math.sqrt(sum / dataArray.length);
-    const db = 20 * Math.log10(rms || 1e-8); // dBFS approx
+    // More accurate dBFS calculation: 20*log10(rms) where rms is 0-1
+    const db = rms > 0 ? 20 * Math.log10(rms) : -96; // -96 dBFS is effectively silence
     // UI meters (0..100%) — map dB [-90..0] to 0..100
     const pct = Math.max(0, Math.min(100, ((db + 90) / 90) * 100));
     meterFill.style.width = `${pct}%`;
     dialogMeterFill.style.width = `${pct}%`;
+    
+    // Update dB level display
+    dbLevel.textContent = `dB: ${db.toFixed(1)}`;
 
 
     // Silence detection with proper timer management
     const thresholdDb = Number(silenceSlider.value);
     const isSilent = db < thresholdDb;
+
+    
+    // Debug logging (uncomment to see what's happening)
+    // console.log(`dB: ${db.toFixed(1)}, Threshold: ${thresholdDb}, Silent: ${isSilent}`);
     
     if (!isSilent) {
       // Sound detected - reset the silence timer
       if (silenceTimer) {
         clearTimeout(silenceTimer);
         silenceTimer = null;
+        // Uncomment for debug: console.log('Sound detected - resetting silence timer');
       }
     } else {
       // Silence detected - start timer if not already running
       if (!silenceTimer) {
         silenceTimer = setTimeout(() => {
-          appendLog(`Auto-stopping after ${holdMs()}ms of silence (db=${db.toFixed(1)})`);
+          appendLog(`Auto-stopping after ${holdMs()}ms of silence (db=${db.toFixed(1)}, threshold=${thresholdDb})`);
           stopRecording();
         }, holdMs());
+        // Uncomment for debug: console.log(`Silence detected - starting ${holdMs()}ms timer`);
       }
     }
 
