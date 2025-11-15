@@ -79,6 +79,19 @@
     <div class="dialog-content">
       <h3>Recording… Speak now</h3>
       <p class="hint">We auto-stop after silence.</p>
+      
+      <!-- Circular Timer Indicator -->
+      <div class="timer-container">
+        <svg class="timer-circle" viewBox="0 0 120 120">
+          <circle class="timer-circle-bg" cx="60" cy="60" r="54" />
+          <circle class="timer-circle-progress" cx="60" cy="60" r="54" />
+        </svg>
+        <div class="timer-text">
+          <span id="timerSeconds">30</span>
+          <small>sec</small>
+        </div>
+      </div>
+      
       <div class="meter meter-lg">
         <div id="dialogMeterFill" class="meter-fill"></div>
       </div>

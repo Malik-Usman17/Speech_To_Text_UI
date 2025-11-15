@@ -1,7 +1,7 @@
 // --- Configuration ---
 
 const UPLOAD_URL = "http://localhost:8000/speech_to_text"; // Change to your backend route
-const MAX_RECORDING_MS = 30_000; // hard cap safety
+const MAX_RECORDING_MS = 20_000; // hard cap safety
 
 
 
@@ -24,6 +24,11 @@ const silenceValue = document.getElementById("silenceValue");
 const holdSlider = document.getElementById("holdSlider");  //silence hold duration
 const holdValue = document.getElementById("holdValue");
 
+// Timer elements
+const timerSeconds = document.getElementById("timerSeconds");
+const timerContainer = document.querySelector(".timer-container");
+const timerProgress = document.querySelector(".timer-circle-progress");
+
 
 gainSlider.addEventListener("input", () => (gainValue.textContent = Number(gainSlider.value).toFixed(2)));
 silenceSlider.addEventListener("input", () => (silenceValue.textContent = `${silenceSlider.value} dBFS`));
@@ -39,16 +44,19 @@ let chunks = [];
 let silenceTimer = null;
 let rafMeter; // animation frame handle
 let startedAt = 0;
+let timerInterval = null; // timer update interval
+let maxDurationTimer = null; // hard safety cap timer
 
 
 recordBtn.addEventListener("click", startRecording);
 stopBtn.addEventListener("click", stopRecording);
 
 async function startRecording() {
+
+  console.log('Duration CAP:', MAX_RECORDING_MS)
+
   try {
     statusText.textContent = "Requesting microphone…";
-
-
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: {
         echoCancellation: true,
@@ -58,15 +66,11 @@ async function startRecording() {
         sampleRate: 48000
       }
     });
-
-
     statusText.textContent = "Microphone granted. Initializing…";
-
-
+    
     // Build processing graph: input -> gain -> highpass -> analyser -> destination
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     sourceNode = audioCtx.createMediaStreamSource(mediaStream);
-
 
     gainNode = audioCtx.createGain();
     gainNode.gain.value = Number(gainSlider.value);
@@ -97,11 +101,16 @@ async function startRecording() {
       audioBitsPerSecond: 128000
     });
 
+    // Add error handler for MediaRecorder
+    mediaRecorder.onerror = (event) => {
+      console.error("MediaRecorder error:", event.error);
+      appendLog(`MediaRecorder error: ${event.error?.message || 'Unknown error'}`);
+      // Don't auto-stop on error, let user handle it
+    };
 
     mediaRecorder.ondataavailable = (e) => {
       if (e.data && e.data.size) chunks.push(e.data);
     };
-
 
     mediaRecorder.onstop = handleStop;
 
@@ -109,23 +118,35 @@ async function startRecording() {
     chunks = [];
     mediaRecorder.start(250); // gather data in chunks
 
-
+    // Set startedAt immediately after starting the recorder
     startedAt = performance.now();
     statusText.textContent = "Recording…";
     recordDialog.showModal();
 
+    // Initialize and start timer
+    startTimer();
 
     startMetersAndSilenceWatch();
 
-
-    // Hard safety cap
-    setTimeout(() => {
-      if (mediaRecorder && mediaRecorder.state === "recording") {
-        appendLog("Stopped due to max duration cap.");
+    // Hard safety cap - check based on actual elapsed time, not just a fixed timeout
+    // This ensures it fires at exactly MAX_RECORDING_MS after recording actually started
+    maxDurationTimer = setInterval(() => {
+      if (!mediaRecorder || mediaRecorder.state !== "recording") {
+        clearInterval(maxDurationTimer);
+        maxDurationTimer = null;
+        return;
+      }
+      
+      const elapsed = performance.now() - startedAt;
+      if (elapsed >= MAX_RECORDING_MS) {
+        clearInterval(maxDurationTimer);
+        maxDurationTimer = null;
+        appendLog(`Stopped due to max duration cap (${Math.round(elapsed)}ms elapsed).`);
         stopRecording();
       }
-    }, MAX_RECORDING_MS);
-  } catch (err) {
+    }, 100); // Check every 100ms for precision
+  } 
+  catch (err) {
     console.error(err);
     statusText.textContent = `Mic error: ${err?.message || err}`;
     appendLog(`Error: ${err?.message || err}`);
@@ -147,7 +168,7 @@ function handleStop() {
   const blob = new Blob(chunks, { type: mediaRecorder.mimeType });
   const file = new File([blob], makeFilename(mediaRecorder.mimeType), { type: mediaRecorder.mimeType });
 
-  console.log('FILE:', file)
+  //console.log('FILE:', file)
 
   // Upload using multipart/form-data
   const form = new FormData();
@@ -174,13 +195,6 @@ function handleStop() {
     `;
   }, 1000);
 
-  // const a = document.createElement('a');
-  // a.href = URL.createObjectURL(file);
-  // a.download = file.name;
-  // document.body.appendChild(a);
-
-  // console.log('a:',a)
-
 
   fetch(UPLOAD_URL, {
     method: "POST",
@@ -199,7 +213,7 @@ function handleStop() {
       }
       
       const response = await res.json();
-      console.log('TEXT RESPONSE:', response);
+      //console.log('TEXT RESPONSE:', response);
       
       // Display the converted text
       if (response.text || response.transcript || response.result) {
@@ -229,23 +243,149 @@ function handleStop() {
 }
 
 function cleanup() {
-  try { recordDialog.close(); } catch { }
+  // Stop timer first to prevent any interference
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+  
+  // Clear max duration timer
+  if (maxDurationTimer) {
+    clearInterval(maxDurationTimer);
+    maxDurationTimer = null;
+  }
+  
   cancelAnimationFrame(rafMeter);
 
+  if (silenceTimer) { 
+    clearTimeout(silenceTimer); 
+    silenceTimer = null; 
+  }
 
-  if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
+  // Close dialog
+  try { 
+    if (recordDialog && recordDialog.open) {
+      recordDialog.close(); 
+    }
+  } catch { }
 
+  // Reset timer display
+  resetTimer();
 
   if (audioCtx) {
     try { audioCtx.close(); } catch { }
     audioCtx = null;
   }
 
-
   if (mediaStream) {
     mediaStream.getTracks().forEach(t => t.stop());
     mediaStream = null;
   }
+}
+
+function startTimer() {
+  // Safety check: ensure timer elements exist
+  if (!timerSeconds || !timerContainer || !timerProgress) {
+    console.warn("Timer elements not found, skipping timer initialization");
+    return;
+  }
+  
+  // Ensure startedAt is set and valid
+  if (!startedAt || startedAt === 0) {
+    console.warn("startedAt not set, cannot start timer");
+    return;
+  }
+  
+  const circumference = 2 * Math.PI * 54; // radius is 54
+  const maxSeconds = MAX_RECORDING_MS / 1000;
+  
+  // Reset timer display
+  timerSeconds.textContent = Math.floor(maxSeconds);
+  timerContainer.classList.remove("warning", "critical");
+  timerProgress.style.strokeDashoffset = circumference;
+
+  // Store the initial startedAt value to prevent it from being modified
+  const timerStartTime = startedAt;
+
+  // Update timer every 100ms for smooth animation
+  timerInterval = setInterval(() => {
+    try {
+      // Only update if recording is still active
+      if (!mediaRecorder) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+        return;
+      }
+      
+      if (mediaRecorder.state !== "recording") {
+        clearInterval(timerInterval);
+        timerInterval = null;
+        return;
+      }
+      
+      // Safety check: ensure timer elements still exist
+      if (!timerSeconds || !timerContainer || !timerProgress) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+        return;
+      }
+      
+      // Calculate elapsed time using the stored start time
+      const elapsed = performance.now() - timerStartTime;
+      const remaining = Math.max(0, MAX_RECORDING_MS - elapsed);
+      // Use Math.floor to show actual remaining seconds (not rounded up)
+      const remainingSeconds = Math.floor(remaining / 1000);
+      
+      // Update seconds display (ensure it doesn't go below 0)
+      timerSeconds.textContent = Math.max(0, remainingSeconds);
+      
+      // Calculate progress (0 to 1)
+      const progress = Math.min(1, Math.max(0, remaining / MAX_RECORDING_MS));
+      const offset = circumference * (1 - progress);
+      timerProgress.style.strokeDashoffset = offset;
+      
+      // Change color and border width based on remaining time
+      const remainingPercent = (remaining / MAX_RECORDING_MS) * 100;
+      
+      if (remainingPercent <= 20) {
+        // Critical: less than 20% remaining
+        timerContainer.classList.remove("warning");
+        timerContainer.classList.add("critical");
+      } else if (remainingPercent <= 40) {
+        // Warning: less than 40% remaining
+        timerContainer.classList.remove("critical");
+        timerContainer.classList.add("warning");
+      } else {
+        // Normal: more than 40% remaining
+        timerContainer.classList.remove("warning", "critical");
+      }
+      
+      // Stop timer if time is up (but don't stop recording - the safety cap handles that)
+      if (remaining <= 0) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
+    } catch (error) {
+      // If any error occurs in timer, log it but don't stop recording
+      console.error("Timer error:", error);
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
+  }, 100);
+}
+
+function resetTimer() {
+  // Safety check: ensure timer elements exist
+  if (!timerSeconds || !timerContainer || !timerProgress) {
+    return;
+  }
+  
+  const circumference = 2 * Math.PI * 54;
+  const maxSeconds = MAX_RECORDING_MS / 1000;
+  
+  timerSeconds.textContent = Math.floor(maxSeconds);
+  timerContainer.classList.remove("warning", "critical");
+  timerProgress.style.strokeDashoffset = circumference;
 }
 
 function startMetersAndSilenceWatch() {
@@ -341,5 +481,3 @@ if (!navigator.mediaDevices?.getUserMedia) {
 if (!window.MediaRecorder) {
   appendLog("Warning: MediaRecorder not supported; consider a fallback/encoder.");
 }
-
-
