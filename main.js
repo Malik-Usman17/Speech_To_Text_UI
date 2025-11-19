@@ -51,21 +51,39 @@ let maxDurationTimer = null; // hard safety cap timer
 recordBtn.addEventListener("click", startRecording);
 stopBtn.addEventListener("click", stopRecording);
 
+
+// async function getMediaStreamObject() {
+//   return new Promise((resolve, reject) => {
+//     console.log('')
+//     navigator.mediaDevices.getUserMedia({       //built-in browser function
+//       audio: {
+//         echoCancellation: true,
+//         noiseSuppression: true,
+//         autoGainControl: true,
+//         channelCount: 1,
+//         sampleRate: 48000
+//       }
+//     }).then(resolve).catch(reject);
+//   });
+// }
+
+async function getMediaStreamObject() {
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1,
+      sampleRate: 48000
+    }
+  })
+}
+
+
 async function startRecording() {
-
-  console.log('Duration CAP:', MAX_RECORDING_MS)
-
   try {
     statusText.textContent = "Requesting microphone…";
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1,
-        sampleRate: 48000
-      }
-    });
+    mediaStream = await getMediaStreamObject();
     statusText.textContent = "Microphone granted. Initializing…";
     
     // Build processing graph: input -> gain -> highpass -> analyser -> destination
@@ -94,6 +112,12 @@ async function startRecording() {
     hpFilter.connect(analyser);
     analyser.connect(destNode);
 
+
+    // Make sure AudioContext is running (some browsers start it suspended)
+    await audioCtx.resume();
+
+    // >>> NEW: auto-calibrate background noise and silence threshold <<<
+    await autoCalibrateSilenceThreshold(1000, 7); // 1s measurement, +10 dB margin
 
     // MediaRecorder will capture from the processed destination stream
     mediaRecorder = new MediaRecorder(destNode.stream, {
@@ -149,7 +173,7 @@ async function startRecording() {
   catch (err) {
     console.error(err);
     statusText.textContent = `Mic error: ${err?.message || err}`;
-    appendLog(`Error: ${err?.message || err}`);
+    appendLog(`Error: Microphone ${err?.message || err}`);
   }
 }
 
@@ -387,6 +411,68 @@ function resetTimer() {
   timerContainer.classList.remove("warning", "critical");
   timerProgress.style.strokeDashoffset = circumference;
 }
+
+// Auto-detect background noise and set silence threshold
+function autoCalibrateSilenceThreshold(durationMs = 1000, marginDb = 7) {
+  return new Promise((resolve) => {
+    if (!analyser) {
+      console.warn("autoCalibrateSilenceThreshold: analyser not ready");
+      return resolve();
+    }
+
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    const samples = [];
+    const start = performance.now();
+
+    function sample() {
+      // Read current audio frame
+      analyser.getByteTimeDomainData(dataArray);
+
+      // Compute RMS in dBFS (same math as in startMetersAndSilenceWatch)
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const v = (dataArray[i] - 128) / 128; // -1..1
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / dataArray.length);
+      const db = rms > 0 ? 20 * Math.log10(rms) : -96;
+
+      samples.push(db);
+
+      // Keep sampling until durationMs reached
+      if (performance.now() - start < durationMs) {
+        requestAnimationFrame(sample);
+      } else {
+        if (!samples.length) {
+          console.warn("autoCalibrateSilenceThreshold: no samples collected");
+          return resolve();
+        }
+
+        // Use median as a robust estimate of noise floor
+        samples.sort((a, b) => a - b);
+        const medianNoiseDb = samples[Math.floor(samples.length / 2)];
+
+        // Threshold slightly above noise floor (remember: these are negative numbers)
+        // e.g. noise ≈ -55 dBFS → threshold ≈ -45 dBFS
+        let thresholdDb = medianNoiseDb + marginDb;
+
+        // Clamp so we don't end up too close to 0 dBFS
+        thresholdDb = Math.min(-5, thresholdDb);
+
+        // Update the slider and label so the UI reflects the auto-setting
+        silenceSlider.value = thresholdDb.toFixed(1);
+        silenceValue.textContent = `${silenceSlider.value} dBFS`;
+
+        appendLog(`Auto-calibrated noise floor ≈ ${medianNoiseDb.toFixed(1)} dBFS, silence threshold set to ${thresholdDb.toFixed(1)} dBFS`);
+
+        resolve();
+      }
+    }
+
+    sample();
+  });
+}
+
 
 function startMetersAndSilenceWatch() {
   const dataArray = new Uint8Array(analyser.frequencyBinCount);
